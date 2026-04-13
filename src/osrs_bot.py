@@ -16,27 +16,33 @@ class OSRSBot:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Zezimax: Next-Gen Visual Imaging Bot (OpenCV Edition)")
-        self.root.geometry("520x370")
+        self.root.geometry("580x460")
         self.root.resizable(False, False)
         
         self.window_id = None
         self.running = False
         self.bot_thread = None
         
-        # TUNABLE: Chopping cooldown – increased to 600s + random jitter
+        # TUNABLE: Chopping cooldown
         self.last_tree_click_time = 0
-        self.chopping_cooldown_seconds = 420 # Can take a few mins
+        self.chopping_cooldown_seconds = 420
         
         # Template folders
         self.tree_templates = self.load_templates('templates/trees')
-        # self.tree_templates = self.load_templates('templates/trees/default')
+        self.empty_slot_templates = self.load_templates('templates/empty_slots')
+        self.bank_templates = self.load_templates('templates/bank')
         
         print(f"✅ Loaded {len(self.tree_templates)} tree marker templates.")
-        print("   (Blue/red outlined circles only – crop tightly!)")
+        print(f"✅ Loaded {len(self.empty_slot_templates)} empty slot templates.")
+        print(f"✅ Loaded {len(self.bank_templates)} bank marker templates.")
+        print("   (All templates must be tightly cropped!)")
         
         # GUI Elements
-        tk.Label(self.root, text="Zezimax Bot", font=("Arial", 14, "bold")).pack(pady=15)
-        tk.Label(self.root, text="Tree markers + Longer cooldown + Slower polling (every ~2.5s)", font=("Arial", 9)).pack(pady=5)
+        tk.Label(self.root, text="Zezimax Bot", font=("Arial", 14, "bold")).pack(pady=10)
+        tk.Label(self.root, text="Tree markers + Longer cooldown + Slower polling (~2.5s)\n"
+                                 "+ FIXED INVENTORY FULL DETECTION (wider ROI + lower threshold)\n"
+                                 "+ Verbose debug for empty slots & bank + better post-dismiss timing", 
+                 font=("Arial", 9), justify="center").pack(pady=5)
         
         self.select_btn = tk.Button(self.root, text="Select RuneLite Window", command=self.select_window, width=35, height=2)
         self.select_btn.pack(pady=8)
@@ -59,7 +65,7 @@ class OSRSBot:
     def load_templates(self, folder):
         templates = []
         if not os.path.exists(folder):
-            print(f"⚠️  Folder '{folder}' not found – create it and drop cropped blue/red circle images!")
+            print(f"⚠️  Folder '{folder}' not found – create it and drop cropped template images!")
             return templates
         for filename in os.listdir(folder):
             if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
@@ -85,8 +91,68 @@ class OSRSBot:
                 matches.append((center_x + offset_x, center_y + offset_y))
         return matches[:3]
     
+    # === IMPROVED: Empty slot detection with WIDER ROI + LOWER threshold + VERBOSE DEBUG ===
+    def find_empty_slots(self, img_bgr):
+        if not self.empty_slot_templates:
+            return []
+        h, w = img_bgr.shape[:2]
+        
+        # WIDER inventory ROI – covers the entire bottom-right panel with extra buffer
+        # This prevents missing empty slots due to slight window resizing or UI padding
+        inv_left = int(w * 0.58)
+        inv_top = int(h * 0.32)
+        inv_right = w
+        inv_bottom = h
+        
+        inv_roi = img_bgr[inv_top:inv_bottom, inv_left:inv_right]
+        
+        matches = []
+        total_potential = 0
+        for i, template in enumerate(self.empty_slot_templates):
+            result = cv2.matchTemplate(inv_roi, template, cv2.TM_CCOEFF_NORMED)
+            # Lowered threshold = more sensitive (catches empty slots even with minor UI differences)
+            locations = np.where(result >= 0.95)
+            num_matches_this_template = len(locations[0])
+            total_potential += num_matches_this_template
+            print(f"   🔍 Empty-slot template {i+1}: {num_matches_this_template} potential matches (threshold 0.75)")
+            
+            for pt in zip(*locations[::-1]):
+                center_x = pt[0] + template.shape[1] // 2 + inv_left
+                center_y = pt[1] + template.shape[0] // 2 + inv_top
+                matches.append((center_x, center_y))
+        
+        print(f"   📊 Total empty slot candidates found in inventory ROI: {len(matches)}")
+        return matches
+    
+    def is_inventory_full(self, img_bgr):
+        empty_slots = self.find_empty_slots(img_bgr)
+        num_empty = len(empty_slots)
+        if num_empty > 0:
+            print(f"📦 Inventory check: {num_empty} empty slot(s) detected in bottom-right panel → NOT full")
+            return False
+        print("📦 Inventory check: NO empty slots detected in bottom-right panel → INVENTORY FULL!")
+        return True
+    
+    # === IMPROVED: Slightly lower bank threshold + debug ===
+    def find_bank_markers(self, img_bgr):
+        if not self.bank_templates:
+            return []
+        matches = []
+        for i, template in enumerate(self.bank_templates):
+            result = cv2.matchTemplate(img_bgr, template, cv2.TM_CCOEFF_NORMED)
+            locations = np.where(result >= 0.73)  # Lowered slightly for better bank detection
+            print(f"   🔍 Bank template {i+1}: {len(locations[0])} potential matches")
+            for pt in zip(*locations[::-1]):
+                center_x = pt[0] + template.shape[1] // 2
+                center_y = pt[1] + template.shape[0] // 2
+                offset_x = random.randint(-8, 8)
+                offset_y = random.randint(-8, 8)
+                matches.append((center_x + offset_x, center_y + offset_y))
+        print(f"   📊 Total bank markers found: {len(matches)}")
+        return matches[:3]
+    
     def detect_idle_orange(self, img_bgr):
-        idle_color_ratio = 0.67 # Set the orange needed for screen to be considered "idle"
+        idle_color_ratio = 0.67
         hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
         lower_orange = np.array([0, 60, 100])
         upper_orange = np.array([40, 255, 255])
@@ -102,7 +168,7 @@ class OSRSBot:
         orange_ratio = cv2.countNonZero(center_mask) / center_mask.size
         
         timestamp = datetime.now().strftime("%H:%M:%S")
-        print(f"[{timestamp}] 🟠 Idle check → Orange ratio in center viewport: {orange_ratio:.2f} (needs > {idle_color_ratio:.2f})")
+        print(f"[{timestamp}] 🟠 Idle check → Orange ratio: {orange_ratio:.2f} (needs > {idle_color_ratio:.2f})")
         return orange_ratio > idle_color_ratio
     
     def click_at(self, abs_x, abs_y, button='left'):
@@ -162,15 +228,41 @@ class OSRSBot:
         self.running = True
         self.bot_thread = threading.Thread(target=self.bot_loop, daemon=True)
         self.bot_thread.start()
-        print("🚀 Visual woodcutting bot started – longer cooldown + slower polling!")
+        print("🚀 Visual woodcutting bot started with IMPROVED inventory detection!")
     
     def stop_bot(self):
         if self.running:
             self.running = False
             print("🛑 Bot stop requested.")
     
+    def handle_idle_state(self, img_bgr, geom, width, height, current_time):
+        """Unified handler with improved logging and timing."""
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🟠 ORANGE IDLE DETECTED")
+        
+        if self.is_inventory_full(img_bgr):
+            bank_positions = self.find_bank_markers(img_bgr)
+            if bank_positions:
+                rel_x, rel_y = random.choice(bank_positions)
+                abs_x = geom['left'] + rel_x
+                abs_y = geom['top'] + rel_y
+                self.click_at(abs_x, abs_y, button='left')
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🏦 Purple bank marker clicked – inventory full!")
+                self.last_tree_click_time = current_time
+                time.sleep(3.0)
+                return
+            else:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Inventory full but no bank marker found! (Will still dismiss and continue)")
+        
+        # Not full (or no bank) → dismiss idle and RESET cooldown so next tree is found immediately
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🌲 Tree chopping finished – resetting cooldown and dismissing idle")
+        center_x = geom['left'] + width // 2
+        center_y = geom['top'] + height // 2
+        self.click_at(center_x, center_y, button='right')
+        self.last_tree_click_time = 0   # CRITICAL: allow immediate tree search
+        time.sleep(2.2)  # Slightly longer pause so game fully returns to normal view
+    
     def bot_loop(self):
-        print("🔄 Visual woodcutting loop active (28s cooldown + ~2.5s polling)...")
+        print("🔄 Visual woodcutting loop active (improved inventory ROI + debug logging)...")
         
         while self.running:
             self.activate_window()
@@ -188,30 +280,20 @@ class OSRSBot:
             width, height = img_bgr.shape[1], img_bgr.shape[0]
             current_time = time.time()
             
-            # === CHOPPING COOLDOWN (prevents clicking new trees while one is still being chopped) ===
             in_chopping_cooldown = (current_time - self.last_tree_click_time) < self.chopping_cooldown_seconds
             
             if in_chopping_cooldown:
                 if self.detect_idle_orange(img_bgr):
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🟠 ORANGE IDLE DETECTED – dismissing!")
-                    center_x = geom['left'] + width // 2
-                    center_y = geom['top'] + height // 2
-                    self.click_at(center_x, center_y, button='right')
-                    self.last_tree_click_time = 0
-                    time.sleep(1.2)
+                    self.handle_idle_state(img_bgr, geom, width, height, current_time)
                     continue
                 else:
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏳ Still chopping (cooldown active)...")
-                    time.sleep(random.uniform(2.2, 2.8))   # ← Slower polling as requested (~2.5s)
+                    time.sleep(random.uniform(2.2, 2.8))
                     continue
             
-            # Not in cooldown → check for orange first, then look for trees
+            # Not in cooldown → check for orange
             if self.detect_idle_orange(img_bgr):
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🟠 ORANGE IDLE DETECTED – dismissing!")
-                center_x = geom['left'] + width // 2
-                center_y = geom['top'] + height // 2
-                self.click_at(center_x, center_y, button='right')
-                time.sleep(1.2)
+                self.handle_idle_state(img_bgr, geom, width, height, current_time)
                 continue
             
             # Look for new trees
@@ -222,9 +304,8 @@ class OSRSBot:
                 abs_y = geom['top'] + rel_y
                 self.click_at(abs_x, abs_y, button='left')
                 self.last_tree_click_time = current_time
-                # Add tiny random jitter to cooldown so it doesn't always fire at exactly N seconds
                 jitter = random.uniform(0, 4)
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🌳 Tree marker clicked – entering {self.chopping_cooldown_seconds + jitter:.1f}s chopping cooldown")
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🌳 Tree marker clicked – entering {self.chopping_cooldown_seconds + jitter:.1f}s cooldown")
                 time.sleep(1.2)
                 continue
             
@@ -238,6 +319,9 @@ class OSRSBot:
         self.root.destroy()
 
 if __name__ == "__main__":
-    print("🚀 Launching Next-Gen OSRS Visual Bot (longer cooldown + slower polling)...")
-    print("📁 templates/trees/ should contain your 12 cropped markers.")
+    print("🚀 Launching Next-Gen OSRS Visual Bot (IMPROVED empty slot detection with wider ROI + debug)...")
+    print("📁 Required folders:")
+    print("   • templates/trees/          ← blue/red circle markers")
+    print("   • templates/empty_slots/    ← tightly cropped ZOOMED empty inventory slot images")
+    print("   • templates/bank/           ← tightly cropped purple bank oval markers")
     bot = OSRSBot()
