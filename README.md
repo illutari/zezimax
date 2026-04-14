@@ -2,7 +2,7 @@
 
 ## Overview
 
-Zezimax is a Python-based image detection bot for *Old School RuneScape* (OSRS) using the RuneLite client. The script provides core automation capabilities including window recognition, pixel/color detection, and simulated mouse/keyboard input.
+Zezimax is a Python-based image detection bot for OSRS using the RuneLite client. The script provides core automation capabilities including window recognition, pixel/color detection, and simulated mouse/keyboard input.
 
 Designed specifically for Linux environments (KDE Plasma on Kubuntu), the bot features a simple graphical user interface (GUI) for easy control. It demonstrates fundamental botting mechanics: selecting the game window, locating specific pixel colors on-screen, performing clicks, and responding to visual state changes.
 
