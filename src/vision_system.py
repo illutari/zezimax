@@ -26,7 +26,9 @@ class VisionSystem:
     def find_empty_slots(self, img_bgr):
         if not self.templates.empty_slot_templates:
             return []
+        
         h, w = img_bgr.shape[:2]
+        # Inventory ROI (bottom-right panel)
         inv_left = int(w * 0.58)
         inv_top = int(h * 0.32)
         inv_right = w
@@ -36,9 +38,17 @@ class VisionSystem:
         matches = []
         for template, filename in self.templates.empty_slot_templates:
             result = cv2.matchTemplate(inv_roi, template, cv2.TM_CCOEFF_NORMED)
+            
+            # NEW: Get the BEST match ratio for this template (exactly like orange idle)
+            best_ratio = float(result.max()) if result.size > 0 else 0.0
+            
+            # Count how many locations are above threshold
             locations = np.where(result >= 0.97)
             num_matches = len(locations[0])
-            print(f"   🔍 Empty-slot '{filename}': {num_matches} potential matches (threshold 0.97)")
+            
+            # Improved debug output with ratio (same style as idle check)
+            print(f"   🔍 Empty-slot '{filename}': best ratio {best_ratio:.4f} "
+                  f"(threshold 0.97) → {num_matches} matches")
             
             for pt in zip(*locations[::-1]):
                 center_x = pt[0] + template.shape[1] // 2 + inv_left
@@ -60,20 +70,40 @@ class VisionSystem:
     def find_bank_markers(self, img_bgr):
         if not self.templates.bank_templates:
             return []
+        
         matches = []
+        best_overall_ratio = 0.0
+        best_location = None
+        
         for template, filename in self.templates.bank_templates:
             result = cv2.matchTemplate(img_bgr, template, cv2.TM_CCOEFF_NORMED)
-            locations = np.where(result >= 0.35)
+            
+            # Best match ratio for this template (same style as empty slots + idle)
+            best_ratio_this_template = float(result.max()) if result.size > 0 else 0.0
+            
+            locations = np.where(result >= 0.55)
             num_matches = len(locations[0])
-            print(f"   🔍 Bank '{filename}': {num_matches} potential matches")
-            for pt in zip(*locations[::-1]):
-                center_x = pt[0] + template.shape[1] // 2
-                center_y = pt[1] + template.shape[0] // 2
-                offset_x = random.randint(-8, 8)
-                offset_y = random.randint(-8, 8)
-                matches.append((center_x + offset_x, center_y + offset_y))
+            
+            print(f"   🔍 Bank '{filename}': best ratio {best_ratio_this_template:.4f} "
+                  f"(threshold 0.55) → {num_matches} matches")
+            
+            # Track the single strongest match across all templates
+            if best_ratio_this_template > best_overall_ratio:
+                best_overall_ratio = best_ratio_this_template
+                y, x = np.unravel_index(result.argmax(), result.shape)
+                best_location = (x + template.shape[1] // 2, y + template.shape[0] // 2)
+        
+        # If we found at least one good match, use the best one(s)
+        if best_location:
+            # Add the single best match with random offset
+            offset_x = random.randint(-8, 8)
+            offset_y = random.randint(-8, 8)
+            matches.append((best_location[0] + offset_x, best_location[1] + offset_y))
+            
+            print(f"   📊 Best bank marker overall ratio: {best_overall_ratio:.4f}")
+        
         print(f"   📊 Total bank markers found: {len(matches)}")
-        return matches[:3]
+        return matches[:3]   # Still limit to 3 for safety
     
     def find_deposit_button(self, img_bgr):
         if self.templates.bank_deposit_template is None:
