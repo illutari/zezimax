@@ -150,7 +150,7 @@ class OSRSBot:
         matches = []
         for template, filename in self.bank_templates:
             result = cv2.matchTemplate(img_bgr, template, cv2.TM_CCOEFF_NORMED)
-            locations = np.where(result >= 0.55)   # UPDATED THRESHOLD
+            locations = np.where(result >= 0.34)   # UPDATED THRESHOLD
             num_matches = len(locations[0])
             print(f"   🔍 Bank '{filename}': {num_matches} potential matches")
             for pt in zip(*locations[::-1]):
