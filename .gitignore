@@ -208,5 +208,5 @@ __marimo__/
 
 
 # Images (for now)
-*.png
-*.jpeg
+# *.png
+# *.jpeg
