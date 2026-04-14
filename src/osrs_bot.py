@@ -27,26 +27,29 @@ class OSRSBot:
         self.last_tree_click_time = 0
         self.chopping_cooldown_seconds = 420
         
-        # Template folders + single deposit button
+        # Template folders + single buttons
         self.tree_templates = self.load_templates('templates/trees')
         self.empty_slot_templates = self.load_templates('templates/empty_slots')
         self.bank_templates = self.load_templates('templates/bank')
         self.bank_deposit_template = self.load_single_template('templates/misc/bank_deposit_inventory.png')
+        self.bank_exit_template = self.load_single_template('templates/misc/exit.png')
         
         print(f"✅ Loaded {len(self.tree_templates)} tree marker templates.")
         print(f"✅ Loaded {len(self.empty_slot_templates)} empty slot templates.")
         print(f"✅ Loaded {len(self.bank_templates)} bank marker templates.")
         if self.bank_deposit_template is not None:
             print("✅ Bank deposit button template loaded successfully.")
+        if self.bank_exit_template is not None:
+            print("✅ Bank exit button template loaded successfully.")
         else:
-            print("❌ Bank deposit template MISSING – create templates/misc/bank_deposit_inventory.png")
+            print("❌ Bank exit template MISSING – create templates/misc/exit.png")
         
         # GUI Elements
         tk.Label(self.root, text="Zezimax Bot", font=("Arial", 14, "bold")).pack(pady=10)
         tk.Label(self.root, text="Tree markers + Longer cooldown + Slower polling (~2.5s)\n"
                                  "+ CLEAN screenshot inventory/bank checks + .png debug\n"
-                                 "+ Auto 'Deposit Inventory' after bank click (max 15 polls)\n"
-                                 "+ FIXED: resume after deposit + start/stop reset + updated thresholds", 
+                                 "+ Deposit → random 1-2s → click Exit button → random 1-2s → resume trees\n"
+                                 "+ FIXED: cooldown reset after full deposit+exit flow", 
                  font=("Arial", 9), justify="center").pack(pady=5)
         
         self.select_btn = tk.Button(self.root, text="Select RuneLite Window", command=self.select_window, width=35, height=2)
@@ -83,13 +86,13 @@ class OSRSBot:
     
     def load_single_template(self, path):
         if not os.path.exists(path):
-            print(f"⚠️  Bank deposit template '{path}' not found – create templates/misc/ folder and add the image!")
+            print(f"⚠️  Template '{path}' not found – create the file!")
             return None
         template = cv2.imread(path, cv2.IMREAD_COLOR)
         if template is not None:
-            print(f"   Loaded bank deposit template: {os.path.basename(path)} ({template.shape[1]}x{template.shape[0]})")
+            print(f"   Loaded single template: {os.path.basename(path)} ({template.shape[1]}x{template.shape[0]})")
             return template
-        print(f"❌ Failed to load bank deposit template: {path}")
+        print(f"❌ Failed to load template: {path}")
         return None
     
     def find_tree_markers(self, img_bgr):
@@ -98,7 +101,7 @@ class OSRSBot:
         matches = []
         for template, _ in self.tree_templates:
             result = cv2.matchTemplate(img_bgr, template, cv2.TM_CCOEFF_NORMED)
-            locations = np.where(result >= 0.65)   # UPDATED THRESHOLD AS REQUESTED
+            locations = np.where(result >= 0.65)   # UPDATED THRESHOLD
             for pt in zip(*locations[::-1]):
                 center_x = pt[0] + template.shape[1] // 2
                 center_y = pt[1] + template.shape[0] // 2
@@ -120,7 +123,7 @@ class OSRSBot:
         matches = []
         for template, filename in self.empty_slot_templates:
             result = cv2.matchTemplate(inv_roi, template, cv2.TM_CCOEFF_NORMED)
-            locations = np.where(result >= 0.97)   # UPDATED THRESHOLD AS REQUESTED
+            locations = np.where(result >= 0.97)   # UPDATED THRESHOLD
             num_matches = len(locations[0])
             print(f"   🔍 Empty-slot '{filename}': {num_matches} potential matches (threshold 0.97)")
             
@@ -147,7 +150,7 @@ class OSRSBot:
         matches = []
         for template, filename in self.bank_templates:
             result = cv2.matchTemplate(img_bgr, template, cv2.TM_CCOEFF_NORMED)
-            locations = np.where(result >= 0.55)   # UPDATED THRESHOLD AS REQUESTED
+            locations = np.where(result >= 0.55)   # UPDATED THRESHOLD
             num_matches = len(locations[0])
             print(f"   🔍 Bank '{filename}': {num_matches} potential matches")
             for pt in zip(*locations[::-1]):
@@ -170,6 +173,19 @@ class OSRSBot:
             center_y = pt[1] + self.bank_deposit_template.shape[0] // 2
             matches.append((center_x, center_y))
         print(f"   🔍 Deposit button: {len(matches)} potential matches (threshold 0.85)")
+        return matches[:1]
+    
+    def find_exit_button(self, img_bgr):
+        if self.bank_exit_template is None:
+            return []
+        result = cv2.matchTemplate(img_bgr, self.bank_exit_template, cv2.TM_CCOEFF_NORMED)
+        locations = np.where(result >= 0.85)
+        matches = []
+        for pt in zip(*locations[::-1]):
+            center_x = pt[0] + self.bank_exit_template.shape[1] // 2
+            center_y = pt[1] + self.bank_exit_template.shape[0] // 2
+            matches.append((center_x, center_y))
+        print(f"   🔍 Exit button: {len(matches)} potential matches (threshold 0.85)")
         return matches[:1]
     
     def detect_idle_orange(self, img_bgr):
@@ -246,7 +262,6 @@ class OSRSBot:
             return
         if self.running:
             return
-        # CRITICAL: Full reset on every Start so tree search begins immediately
         self.last_tree_click_time = 0
         self.running = True
         self.bot_thread = threading.Thread(target=self.bot_loop, daemon=True)
@@ -256,27 +271,24 @@ class OSRSBot:
     def stop_bot(self):
         if self.running:
             self.running = False
-            self.last_tree_click_time = 0   # Reset on stop so next Start is clean
+            self.last_tree_click_time = 0
             print("🛑 Bot stop requested.")
     
     def handle_idle_state(self, geom, width, height, current_time):
         """Orange detected → dismiss → NEW clean screenshot → inventory + bank on clean image"""
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🟠 ORANGE IDLE DETECTED → Dismissing first...")
         
-        # Step 1: Dismiss the orange idle overlay
         center_x = geom['left'] + width // 2
         center_y = geom['top'] + height // 2
         self.click_at(center_x, center_y, button='right')
         time.sleep(1.8)
         
-        # Step 2: Take a FRESH screenshot (clean, non-orange)
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Taking NEW clean screenshot for inventory/bank checks...")
         with mss() as sct:
             screenshot = sct.grab(geom)
             img_pil = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
             clean_img_bgr = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
         
-        # Step 3: Inventory + bank checks on clean screenshot
         if self.is_inventory_full(clean_img_bgr):
             bank_positions = self.find_bank_markers(clean_img_bgr)
             if bank_positions:
@@ -286,10 +298,10 @@ class OSRSBot:
                 self.click_at(abs_x, abs_y, button='left')
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] 🏦 Purple bank marker clicked – starting bank deposit polling cycle...")
                 
-                # Start dedicated bank deposit polling
+                # Start deposit flow (it will handle the final cooldown reset)
                 self.perform_bank_deposit(geom)
-                self.last_tree_click_time = current_time
-                return
+                return   # <-- NO cooldown set here anymore
+            
             else:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Inventory full but no bank marker found!")
         
@@ -297,10 +309,10 @@ class OSRSBot:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🌲 Tree chopping finished – resetting cooldown")
         self.last_tree_click_time = 0
     
-    # === UPDATED: Bank deposit polling with longer resume delay + cooldown reset ===
+    # === Deposit → 1-2s → Exit → 1-2s → final cooldown reset ===
     def perform_bank_deposit(self, geom):
         if self.bank_deposit_template is None:
-            print("⚠️ No deposit button template loaded – skipping deposit and resuming chopping")
+            print("⚠️ No deposit button template – skipping and resuming")
             self.last_tree_click_time = 0
             return
         
@@ -319,24 +331,45 @@ class OSRSBot:
                 self.click_at(abs_x, abs_y, button='left')
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] 🏦 Deposit Inventory button clicked!")
                 
-                # LONGER pause you requested so game fully closes bank + mouse can move again
-                pause = random.uniform(3.5, 5.5)
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏳ Pausing {pause:.1f}s before resuming woodcutting...")
-                time.sleep(pause)
+                pause1 = random.uniform(1.0, 2.0)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏳ Pausing {pause1:.1f}s before clicking Exit button...")
+                time.sleep(pause1)
                 
-                # CRITICAL: Reset cooldown so bot immediately looks for trees
+                self.click_exit_button(geom)
+                
+                pause2 = random.uniform(1.0, 2.0)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏳ Pausing {pause2:.1f}s before resuming woodcutting...")
+                time.sleep(pause2)
+                
                 self.last_tree_click_time = 0
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🌲 Bank deposit complete – cooldown reset, resuming tree search")
-                return  # Back to normal tree chopping loop
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🌲 Bank deposit + exit complete – cooldown reset, resuming tree search")
+                return
             
             print(f"   Attempt {attempt}/15 – deposit button not found yet...")
             time.sleep(random.uniform(2.0, 4.0))
         
         print("⚠️ Max 15 deposit attempts reached – resuming chopping anyway")
-        self.last_tree_click_time = 0  # Safety reset
+        self.last_tree_click_time = 0
+    
+    def click_exit_button(self, geom):
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Taking screenshot for Exit button...")
+        with mss() as sct:
+            screenshot = sct.grab(geom)
+            img_pil = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
+            img_bgr = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+        
+        exit_positions = self.find_exit_button(img_bgr)
+        if exit_positions:
+            rel_x, rel_y = exit_positions[0]
+            abs_x = geom['left'] + rel_x
+            abs_y = geom['top'] + rel_y
+            self.click_at(abs_x, abs_y, button='left')
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🏦 Exit button clicked!")
+        else:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Exit button not found – continuing anyway")
     
     def bot_loop(self):
-        print("🔄 Visual woodcutting loop active (updated thresholds + fixed resume after deposit)...")
+        print("🔄 Visual woodcutting loop active (Deposit → Exit → tree search flow)...")
         
         while self.running:
             self.activate_window()
@@ -391,10 +424,11 @@ class OSRSBot:
         self.root.destroy()
 
 if __name__ == "__main__":
-    print("🚀 Launching Next-Gen OSRS Visual Bot (UPDATED THRESHOLDS + fixed resume after deposit)...")
-    print("📁 Required folders:")
+    print("🚀 Launching Next-Gen OSRS Visual Bot (Deposit → Exit → tree search flow)...")
+    print("📁 Required folders/files:")
     print("   • templates/trees/")
     print("   • templates/empty_slots/")
     print("   • templates/bank/")
-    print("   • templates/misc/bank_deposit_inventory.png  ← single file")
+    print("   • templates/misc/bank_deposit_inventory.png")
+    print("   • templates/misc/exit.png")
     bot = OSRSBot()
