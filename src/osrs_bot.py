@@ -5,7 +5,7 @@ import threading
 from template_manager import TemplateManager
 from vision_system import VisionSystem
 from input_controller import InputController
-from skills.woodcutting import WoodcuttingBot   # ← Updated import path
+from skills.woodcutting import WoodcuttingBot
 
 
 class OSRSBot:
@@ -14,16 +14,16 @@ class OSRSBot:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Zezimax: Next-Gen Visual Imaging Bot")
-        self.root.geometry("640x540")
+        self.root.geometry("640x580")  # Slightly taller for resolution options
         self.root.resizable(False, False)
         
         self.running = False
         self.bot_thread = None
         self.current_skill_bot = None
         
-        # Shared components
-        self.templates = TemplateManager()
-        self.vision = VisionSystem(self.templates)
+        # Shared components (created when window is selected)
+        self.templates = None
+        self.vision = None
         self.input = InputController()
         
         # GUI
@@ -38,8 +38,22 @@ class OSRSBot:
         )
         self.skill_dropdown.pack(pady=5)
         
-        self.select_btn = tk.Button(self.root, text="Select RuneLite Window", command=self.input.select_window, width=35, height=2)
-        self.select_btn.pack(pady=15)
+        # Resolution selection
+        tk.Label(self.root, text="Resolution:", font=("Arial", 10)).pack(pady=(15, 0))
+        
+        res_frame = tk.Frame(self.root)
+        res_frame.pack(pady=5)
+        
+        self.resolution_var = tk.StringVar(value="1080")
+        tk.Radiobutton(res_frame, text="1080p", variable=self.resolution_var, 
+                      value="1080", font=("Arial", 10)).pack(side=tk.LEFT, padx=20)
+        tk.Radiobutton(res_frame, text="1440p", variable=self.resolution_var, 
+                      value="1440", font=("Arial", 10)).pack(side=tk.LEFT, padx=20)
+        
+        self.select_btn = tk.Button(self.root, text="Select RuneLite Window", 
+                                   command=self.select_window_and_load_templates, 
+                                   width=35, height=2)
+        self.select_btn.pack(pady=20)
         
         self.start_btn = tk.Button(self.root, text="Start Bot (F11)", command=self.start_bot, width=35, height=2)
         self.start_btn.pack(pady=8)
@@ -57,15 +71,44 @@ class OSRSBot:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.root.mainloop()
     
+    def select_window_and_load_templates(self):
+        """Select RuneLite window AND immediately load templates for the chosen resolution."""
+        success = self.input.select_window()
+        
+        if success and self.input.window_id:
+            selected_res = self.resolution_var.get()
+            
+            print(f"✅ RuneLite window selected successfully (ID: {self.input.window_id})")
+            print(f"📸 Loading {selected_res}p templates and vision system...")
+            
+            self.templates = TemplateManager(resolution=selected_res)
+            self.vision = VisionSystem(self.templates)
+            
+            # Combined success message (exactly what you asked for)
+            messagebox.showinfo(
+                "Success",
+                f"✅ RuneLite window selected successfully!\n"
+                f"Window ID: {self.input.window_id}\n\n"
+                f"📸 Templates for {selected_res}p resolution have been loaded and are ready to use."
+            )
+        else:
+            messagebox.showerror("Selection Failed", "Failed to select RuneLite window.")
+    
     def start_bot(self):
         if not self.input.window_id:
-            messagebox.showwarning("No Window", "Select your RuneLite window first!")
+            messagebox.showwarning("No Window", "Please click 'Select RuneLite Window' first!")
+            return
+        if not self.templates or not self.vision:
+            messagebox.showwarning("Templates Not Loaded", 
+                                  "Please select your RuneLite window again to load templates.")
             return
         if self.running:
             return
         
         selected_skill = self.skill_var.get()
-        print(f"🚀 Starting {selected_skill} bot...")
+        selected_res = self.resolution_var.get()
+        
+        print(f"🚀 Starting {selected_skill} bot at {selected_res}p resolution...")
         
         if selected_skill == "Woodcutting":
             self.current_skill_bot = WoodcuttingBot(self.vision, self.input, self.templates)

@@ -130,3 +130,33 @@ class VisionSystem:
             matches.append((center_x, center_y))
         print(f"   🔍 Exit button: {len(matches)} potential matches (threshold 0.85)")
         return matches[:1]
+    
+    # NEW: Special move detection (top 1/8 corner near minimap)
+    def find_special_move(self, img_bgr):
+        """Detect special move icon ONLY in the top 1/8 corner (minimap border area)."""
+        if self.templates.special_move_template is None:
+            return []
+        
+        h, w = img_bgr.shape[:2]
+        # ROI = top ~1/8 of screen (slightly taller for safety) + right side (minimap area)
+        roi_h = int(h * 0.125)          # exactly 1/8 height
+        roi_w_start = int(w * 0.68)     # start from ~68% width (far right corner)
+        
+        roi = img_bgr[0:roi_h, roi_w_start:w]
+        
+        result = cv2.matchTemplate(roi, self.templates.special_move_template, cv2.TM_CCOEFF_NORMED)
+        locations = np.where(result >= 0.95)
+        
+        matches = []
+        for pt in zip(*locations[::-1]):
+            # Convert ROI coords back to full-screen coords
+            center_x = pt[0] + self.templates.special_move_template.shape[1] // 2 + roi_w_start
+            center_y = pt[1] + self.templates.special_move_template.shape[0] // 2
+            matches.append((center_x, center_y))
+        
+        if matches:
+            print(f"   ⚔️ Special move icon found at threshold 0.95! ({len(matches)} match)")
+        else:
+            print(f"   ⚔️ No special move icon in top 1/8 corner (threshold 0.95)")
+        
+        return matches[:1]

@@ -1,6 +1,5 @@
 import subprocess
 import time
-from tkinter import messagebox
 from datetime import datetime
 
 class InputController:
@@ -18,13 +17,15 @@ class InputController:
         print(f"[{timestamp}] 🖱️  {button.upper()} click at ({abs_x}, {abs_y})")
     
     def select_window(self):
+        """Selects the RuneLite window (now silent – success message handled in GUI)."""
         try:
             output = subprocess.check_output(['xdotool', 'selectwindow'], stderr=subprocess.STDOUT).decode('utf-8').strip()
             self.window_id = output
-            messagebox.showinfo("Window Selected", f"RuneLite window selected!\nID: {self.window_id}")
             self.activate_window()
+            return True
         except Exception as e:
-            messagebox.showerror("Selection Error", f"Failed:\n{e}")
+            print(f"❌ Window selection failed: {e}")
+            return False
     
     def get_window_geometry(self):
         if not self.window_id:

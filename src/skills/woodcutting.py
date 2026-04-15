@@ -67,6 +67,11 @@ class WoodcuttingBot(SharedSkillActions):
                 self.last_tree_click_time = current_time
                 jitter = random.uniform(0, 4)
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] 🌳 Tree marker clicked – entering {self.chopping_cooldown_seconds + jitter:.1f}s cooldown")
+                
+                # NEW: Special move check RIGHT AFTER clicking a tree (NOT part of idle loop)
+                time.sleep(0.9)  # brief pause for UI to update
+                self._check_and_use_special_move(geom)
+                
                 time.sleep(1.2)
                 continue
             
@@ -104,3 +109,24 @@ class WoodcuttingBot(SharedSkillActions):
         
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🌲 Tree chopping finished – resetting cooldown")
         self.last_tree_click_time = 0
+    
+    # NEW: Dedicated special move handler (called ONLY after tree click)
+    def _check_and_use_special_move(self, geom):
+        """Check for special attack move in top 1/8 corner and activate if present."""
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚔️ Running special move check (top 1/8 corner)...")
+        
+        with mss() as sct:
+            screenshot = sct.grab(geom)
+            img_pil = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
+            img_bgr = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+        
+        special_positions = self.vision.find_special_move(img_bgr)
+        if special_positions:
+            rel_x, rel_y = special_positions[0]
+            abs_x = geom['left'] + rel_x
+            abs_y = geom['top'] + rel_y
+            self.input.click_at(abs_x, abs_y, button='left')
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚔️ Special move ACTIVATED!")
+            time.sleep(1.0)
+        else:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚔️ No special move available – continuing normal idle monitoring")
